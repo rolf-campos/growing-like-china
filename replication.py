@@ -87,7 +87,7 @@ class Parameters:
         # iceberg cost
         iceberg = 1.0 - self.r / (self.r_soe_ini)
         self.iceberg = iceberg
-        
+
         T = self.time_max + self.age_max - 1
         self.ice_t = financial_reform(T, iceberg, start=9, end=27, speed=2.38)
 
@@ -254,7 +254,7 @@ class Entrepreneur(Agent):
 
     def set_income_stream(self, w_t, g=False):
         """
-        Computes income stream of an entreoreneur given all attributes.
+        Computes income stream of an entrepreneur given all attributes.
         Sets the income_stream = np.array of size <age_max>.
         """
         relevant_w_t = w_t[self.year-1:]
@@ -272,6 +272,81 @@ class Entrepreneur(Agent):
         # income_stream[:self.age-1] = 0.  # Erase income in the past
         self.income_stream = income_stream
 
+    def optimize(self, environment, w_t, m_t, r_t):
+        """
+        Optimal decisions
+        """
+        r_t = adjust_rho(r_t, environment)
+        # r_t = np.concatenate((environment.r*np.ones(self.age_T), r_t))
+        r_t = r_t[:self.age_max]
+        r_t[:self.age_T-1] = environment.r
+        W = e.wealth * (1.+environment.r)
+        income = e.income(m_t, g=environment.g_t)
+        # print(income.sum())
+        pv_income = pv(income, environment.r)
+        wealth_0 = pv_income + W
+        r_t = r_t[self.age-1:]
+        euler = e.euler(r_t, g=False)
+        ratio, rflows = pv(euler.cumprod(), r_t, True)
+        euler_detrended = e.euler(r_t, g=environment.g_t)
+        c_0 = wealth_0 / ratio.sum()
+        c = c_0 * euler_detrended.cumprod()
+
+        w = None
+        return {'consumption': c, 'wealth': w}
+
+    def euler(self, r_t, g=False):
+        """
+        g is used to obtain detrended consumption
+        """
+        r_t = np.asarray(r_t)
+        factor_t = (self.beta*(1.+r_t))**(1./self.sigma)
+        if g:
+            g = np.asarray(g)
+            assert g.size == 1 or g.size == r_t.size
+            factor_t = factor_t / (1.+g)
+        factor_t[0] = 1.  # normalize
+        return factor_t
+
+    def income(self, w_t, g=False):
+        """
+        Computes income stream of an entrepreneur given all attributes.
+        Returns np.array of size <age_max>.
+        """
+        relevant_w_t = w_t[self.year-1:]
+
+        income_by_age = dict()
+        for i, age in enumerate(range(self.age, self.age_T)):
+            income_by_age[age] = relevant_w_t[i]
+        income_by_age[self.age_T] = 0.
+
+        income_stream = income_steps(
+                income_by_age,
+                self.age_max,
+                g
+                )
+        # income_stream[:self.age-1] = 0.  # Erase income in the past
+        return income_stream
+
+
+def pv(stream, r_t, return_flows=False):
+    stream = np.asarray(stream)
+    r_t = np.asarray(r_t)
+    T = stream.size
+    if r_t.size == 1 and r_t.size < T:
+        r = r_t.sum()
+        r_t = np.array(T*[r])
+    assert len(stream) == len(r_t), "stream = {}, r_t = {}".format(len(stream), len(r_t))
+    # factor_t = np.array([(1.+r_t)**(-t) for t in range(T)])
+    tt = np.array([-t for t in range(T)])
+    factor_t = (np.ones(T) + r_t)**tt
+    factor_t = np.ones(T) / (np.ones(T) + r_t)
+    factor_t[0] = 1.
+    flows = stream * factor_t.cumprod()
+    if return_flows:
+        return flows.sum(), flows
+    else:
+        return flows.sum()
 
 def demographic_distribution(g_n, age_max):
     """
@@ -590,4 +665,6 @@ w_t = initial_guess['w_t'].flatten()
 m_t = initial_guess['m_t'].flatten()
 rho_t = initial_guess['rho_t'].flatten()
 e = Entrepreneur(age=2, wealth=wealth_pre_E_new[1])
+e = Entrepreneur(age=1, wealth=0.0)
 tr = saving_E_existing_new(e, params, m_t, rho_t)
+
