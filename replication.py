@@ -282,12 +282,16 @@ class Entrepreneur(Agent):
         r_t[:self.age_T-1] = environment.r
         W = e.wealth * (1.+environment.r)
         income = e.income(m_t, g=environment.g_t)
+        income = income[self.age-1:]
         # print(income.sum())
         pv_income = pv(income, environment.r)
         wealth_0 = pv_income + W
         r_t = r_t[self.age-1:]
+        print(r_t)
         euler = e.euler(r_t, g=False)
+        print(euler)
         ratio, rflows = pv(euler.cumprod(), r_t, True)
+        print(rflows)
         euler_detrended = e.euler(r_t, g=environment.g_t)
         c_0 = wealth_0 / ratio.sum()
         c = c_0 * euler_detrended.cumprod()
@@ -544,23 +548,23 @@ def life_cycle_profile_pre(environment):
     return wealth_pre
 
 
-params = Parameters()
-wealth_pre_new = params.initial_ratio * life_cycle_profile_pre(params)
-wealth_pre_E_new = params.initial_ratio_E * life_cycle_profile_pre(params)
-
-# Compare with Matlab data
-data_pre = loadmat(os.path.join('original_files', 'data_pre.mat'))
-wealth_pre_2 = data_pre['wealth_pre'].flatten()
-check_1 = pd.DataFrame(
-        {'Python new': wealth_pre_new, 'Matlab': wealth_pre_2})
-check_1.plot(title='wealth_pre', style=['y-', 'k--'])
-
-# Compare with Matlab data
-data_pre_E = loadmat(os.path.join('original_files', 'data_pre_E.mat'))
-wealth_pre_E_2 = data_pre_E['wealth_pre_E'].flatten()
-check_1 = pd.DataFrame(
-        {'Python new': wealth_pre_E_new, 'Matlab': wealth_pre_E_2})
-check_1.plot(title='wealth_pre_E', style=['y-', 'k--'])
+#params = Parameters()
+#wealth_pre_new = params.initial_ratio * life_cycle_profile_pre(params)
+#wealth_pre_E_new = params.initial_ratio_E * life_cycle_profile_pre(params)
+#
+## Compare with Matlab data
+#data_pre = loadmat(os.path.join('original_files', 'data_pre.mat'))
+#wealth_pre_2 = data_pre['wealth_pre'].flatten()
+#check_1 = pd.DataFrame(
+#        {'Python new': wealth_pre_new, 'Matlab': wealth_pre_2})
+#check_1.plot(title='wealth_pre', style=['y-', 'k--'])
+#
+## Compare with Matlab data
+#data_pre_E = loadmat(os.path.join('original_files', 'data_pre_E.mat'))
+#wealth_pre_E_2 = data_pre_E['wealth_pre_E'].flatten()
+#check_1 = pd.DataFrame(
+#        {'Python new': wealth_pre_E_new, 'Matlab': wealth_pre_E_2})
+#check_1.plot(title='wealth_pre_E', style=['y-', 'k--'])
 
 
 def adjust_rho(rho_t, environment):
@@ -604,6 +608,7 @@ def saving_E_existing_new(agent, environment, m_t, rho_t):
     e.set_income_stream(m_t, g=g_t)
 
     A = pv_income(e.income_stream, age, r)
+    print(A)
     if age < age_T:
         A += current_wealth * (1.+r)
     else:
@@ -620,6 +625,7 @@ def saving_E_existing_new(agent, environment, m_t, rho_t):
     factor_cum = factor.cumprod()
     life_span = e.age_max - e.age + 1  # includes current age
     ratio = factor_cum[-life_span:]
+    print(ratio)
 
     # optimal consumption and savings
     for i in range(age, age_max+1):
@@ -657,14 +663,18 @@ def saving_E_existing_new(agent, environment, m_t, rho_t):
 
     return wealth, consumption
 
-
+params = Parameters()
 # initial guess = true results
 initial_guess = loadmat(os.path.join('original_files', 'data_result.mat'))
 
 w_t = initial_guess['w_t'].flatten()
 m_t = initial_guess['m_t'].flatten()
 rho_t = initial_guess['rho_t'].flatten()
-e = Entrepreneur(age=2, wealth=wealth_pre_E_new[1])
-e = Entrepreneur(age=1, wealth=0.0)
-tr = saving_E_existing_new(e, params, m_t, rho_t)
+#e = Entrepreneur(age=2, wealth=wealth_pre_E_new[1])
+e = Entrepreneur(age=2, wealth=0.0)
+tr1 = e.optimize(params, w_t, m_t, rho_t)
+tr2 = saving_E_existing_new(e, params, m_t, rho_t)
+print(e)
+print(tr1)
+print(tr2)
 
