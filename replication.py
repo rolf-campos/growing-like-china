@@ -352,25 +352,6 @@ class Worker(Agent):
                 self.age_retire: self.pension
                 }
 
-#    def set_income_stream(self, g=False):
-#        """
-#        Computes income stream of a worker given all attributes.
-#        Sets the income_stream = np.array of size <age_max>.
-#        """
-#        income_stream = income_steps(
-#                self.income_by_age,
-#                self.age_max,
-#                g
-#                )
-#        income_stream[:self.age-1] = 0.  # Erase income in the past
-#        self.income_stream = income_stream
-#        self.income_stream = worker_income(self.wage,
-#                                           self.pension,
-#                                           self.age,
-#                                           self.age_retire,
-#                                           self.age_max,
-#                                           g_t)
-
     def income(self, g=False):
         """
         Computes income stream of a worker given all attributes.
@@ -382,12 +363,6 @@ class Worker(Agent):
                 )
         income_stream[:self.age-1] = 0.  # Erase income in the past
         return income_stream
-#        self.income_stream = worker_income(self.wage,
-#                                           self.pension,
-#                                           self.age,
-#                                           self.age_retire,
-#                                           self.age_max,
-#                                           g_t)
 
     def optimize0(self, environment):
         """
@@ -406,13 +381,8 @@ class Worker(Agent):
         wage = income_stream[age-1]
 
         # optimal consumption and savings
-#        A = pv_income(income_stream, age, r) + wealth*(1.+r)
-#        print('A1 (worker): {}'.format(A))
         A = pv(income_stream[self.age-1:], r) + wealth*(1.+r)
-        # TFP growth adjusted discount factor
-        # beta_adj = beta * (1.+g_t)**(1.-sigma)
-        # ratio = euler(age, age_max, beta_adj, sigma, r, g_t)
-        # ratio = euler_bc(age, age_max, beta, sigma, r)
+
         life_span = age_max - age + 1  # includes current age
         # factor^t for each c_t when Euler eq. is substituted
         # in budget constraint
@@ -431,14 +401,6 @@ class Worker(Agent):
 
     def optimize(self, environment):
         return self.optimize0(environment)
-
-
-#def euler_bc(age, age_max, beta, sigma, r):
-#    life_span = age_max - age + 1  # includes current age
-#    # factor^t for each c_t when Euler eq. is substituted in budget constraint
-#    factor = (beta*(1.+r))**(1./sigma)/(1.+r)
-#    ratio = [factor**j for j in range(life_span)]
-#    return np.array(ratio)
 
 
 class Entrepreneur(Agent):
@@ -468,31 +430,10 @@ class Entrepreneur(Agent):
         # self.income_by_age = dict(income_by_age)
         self.year = year
 
-#    def set_income_stream(self, w_t, g=False):
-#        """
-#        Computes income stream of an entrepreneur given all attributes.
-#        Sets the income_stream = np.array of size <age_max>.
-#        """
-#        relevant_w_t = w_t[self.year-1:]
-#
-#        income_by_age = dict()
-#        for i, age in enumerate(range(self.age, self.age_T)):
-#            income_by_age[age] = relevant_w_t[i]
-#        income_by_age[self.age_T] = 0.
-#
-#        income_stream = income_steps(
-#                income_by_age,
-#                self.age_max,
-#                g
-#                )
-#        # income_stream[:self.age-1] = 0.  # Erase income in the past
-#        self.income_stream = income_stream
-
     def optimize(self, environment, w_t, m_t, r_t):
         """
         Optimal decisions for consumption and wealth
         """
-        #r_t = adjust_rho(r_t, environment)
         r_t = environment.adjust_rho(r_t)
         r_t = r_t[self.year-1:]  # relevant part of r_t
         if self.age < self.age_T:
@@ -564,12 +505,11 @@ class Entrepreneur(Agent):
         return income_stream
 
 
+# Main functions
 def life_cycle_profile_pre(environment):
     # Dummy worker to obtain age_max and a vector of wages
     w1 = Worker(age=1, wage=environment.w_pre)
     age_max = w1.age_max
-#    w1.set_income_stream(g=0.)
-#    wages = w1.income_stream
     wages = w1.income(g=0.)
 
     wealth_pre = np.zeros(age_max)
@@ -580,7 +520,6 @@ def life_cycle_profile_pre(environment):
         wage = wages[i]
         wealth = wealth_pre[i]
         w = Worker(age=age, wage=wage, wealth=wealth)
-        # w.set_income_stream(g=environment.g_t)
         wealth_next, sr_pre[i], consumption_pre[i] = w.optimize0(environment)
         if age < age_max:
             wealth_pre[i+1] = wealth_next
@@ -616,259 +555,12 @@ rho_t = initial_guess['rho_t'].flatten()
 e = Entrepreneur(age=1, wealth=0.0, year=100)
 tr1 = e.optimize(params, w_t, m_t, rho_t)
 
-tr3 = saving_E_newly_born(e.year)
+# tr3 = saving_E_newly_born(e.year)
 # tr3 = saving_E_existing(e.age, e.wealth)
 print(e)
 print(tr1['consumption'])
 # print(tr2[1])
-print(tr3[1])
+# print(tr3[1])
 
 print(tr1['wealth'])
-print(tr3[0])
-
-
-#def pv_income(income_stream, age, r, g=0.):
-#    T_max = len(income_stream)  # same as age_max
-#    factor = np.zeros(T_max)
-#    for t in range(age, T_max+1):
-#        factor[t-1] = ((1.+g)/(1.+r))**(t-age)
-#    factored_income_stream = factor * income_stream
-#    return factored_income_stream.sum()
-
-
-#def demographic_distribution(g_n, age_max):
-#    """
-#    Calculate the distribution of the population according to age
-#    given the fertility rate g_n and age_max.
-#    Returns a np.array of size <age_max>.
-#    """
-#    if float(g_n) == 0.0:
-#        # Uniform across age
-#        profile = 1.0 / age_max * np.ones(age_max)
-#    else:
-#        population = np.empty(age_max)
-#        for i in range(age_max):
-#            age = i + 1
-#            population[i] = (1+g_n)**(age_max-age)
-#        total_population = (1.0-(1.0+g_n)**age_max) / (1.0-(1.0+g_n))
-#        profile = population / total_population
-#    return profile
-
-
-#
-#
-#def adjust_rho(rho_t, environment):
-#    """
-#    Adjustment of the rate of return due to the endogenous borrowing constraint
-#    """
-#    r = environment.r
-#    eta = environment.eta
-#    ice_t = environment.ice_t
-#    print(r, eta, ice_t[:10])
-#    c_t = (  # TBD: verify formula
-#          (rho_t*(1.+r/(1.-ice_t))+eta*(rho_t-r/(1.-ice_t)))
-#          / (1.+r/(1.-ice_t)-eta*(rho_t-r/(1.-ice_t)))
-#          )
-#    return np.maximum(rho_t, c_t)
-
-
-#def income_steps(income_by_age, age_max, g=False):
-#    """
-#    Generate a generic income stream (np.array) of length <age_max> of
-#    the form a = [0,...0, inc1,..., inc1..., inc2,... inc2,...],
-#    where the inc1 starts at age1, inc2 at age2, etc.
-#
-#    If g != 0, non-zero values are multiplied by (1+g)^jm j = 0, 1, 2,...
-#
-#    The counter starts at j = 0 at age_1.
-#    """
-#    # a = np.zeros(age_max)
-#    size = age_max
-#    d = {key-1: val for key, val in income_by_age.items()}
-#    a = steps(d, size)
-#    # for age in ages:
-#    #    a[age-1:] = income_by_age[age]
-#    if g:
-#        sorted_ages = sorted(list(income_by_age.keys()))
-#        first_age = sorted_ages[0]
-#        life_span = age_max - first_age + 1
-#        growth = np.array([(1.+g)**j for j in range(life_span)])
-#        a[-life_span:] = a[-life_span:] * growth
-#    return a
-
-
-#def worker_income(wage, pension, age, age_retire, age_max, g_t):
-#    # Build stream for any worker
-#    life_span = age_max - age + 1  # includes current age
-#    growth = np.array([(1+g_t)**j for j in range(life_span)])
-#
-#    stream = np.zeros(age_max)
-#    stream[age-1:age_retire-1] = wage
-#    stream[age_retire-1:age_max+1] = pension
-#    stream[-life_span:] = stream[-life_span:] * growth
-#    # stream[:age-1] = 0.0  # remove income from the past
-#    return stream
-
-
-# def euler(age, age_max, beta_adj, sigma, r, g_t):
-#    ratio = np.zeros(age_max)
-#    for i in range(age, age_max + 1):
-#        # the interest rate adjusted ratio of optimal consumption
-#        # to consumption of the current age
-#        if i == age:
-#            ratio[i-1] = 1.0
-#        else:
-#            ratio[i-1] = ((beta_adj*(1.+r)/(1.+g_t))**(1./sigma)
-#                          * (1.+g_t) / (1.+r)
-#                          * ratio[i-2])
-#    return ratio
-
-
-#def saving(agent, environment):
-#    """
-#    Saving, wealth_prime, saving rate, consumption for agents
-#    """
-#    # Environment variables
-#    r = environment.r
-#    g_t = environment.g_t
-#    # Agent variables
-#    age_max = agent.age_max
-#    age = agent.age
-#    beta = agent.beta
-#    sigma = agent.sigma
-#    wealth = agent.wealth
-#    income_stream = agent.income_stream
-#    wage = agent.income_stream[age-1]
-#
-#    # optimal consumption and savings
-#    A = pv_income(income_stream, age, r) + wealth*(1.+r)
-#    # TFP growth adjusted discount factor
-#    # beta_adj = beta * (1.+g_t)**(1.-sigma)
-#    # ratio = euler(age, age_max, beta_adj, sigma, r, g_t)
-#    ratio = euler_bc(age, age_max, beta, sigma, r)
-#    consumption = A / (np.sum(ratio))
-#    saving = wealth*r + wage - consumption
-#    sr = saving / (wealth*r+wage)  # saving rate
-#
-#    # computing next-period wealth
-#    wealth_prime = wealth*(1.+r) + wage - consumption
-#    # adjustment because of detrending
-#    wealth_prime_detrended = wealth_prime / (1.+g_t)
-#    return saving, wealth_prime_detrended, sr, consumption
-
-
-#def life_cycle_profile_pre_old(environment):
-#    # Dummy worker to obtain age_max and a vector of wages
-#    w1 = Worker(age=1, wage=environment.w_pre)
-#    age_max = w1.age_max
-#    w1.set_income_stream(g=0.)
-#    wages = w1.income_stream
-#
-#    wealth_pre = np.zeros(age_max)
-#    consumption_pre = np.zeros(age_max)
-#    sr_pre = np.zeros(age_max)
-#    for i in range(age_max):
-#        age = i + 1
-#        wage = wages[i]
-#        wealth = wealth_pre[i]
-#        w = Worker(age=age, wage=wage, wealth=wealth)
-#        w.set_income_stream(g=environment.g_t)
-#        _, wealth_next, sr_pre[i], consumption_pre[i] = saving(w, environment)
-#        if age < age_max:
-#            wealth_pre[i+1] = wealth_next
-#    return wealth_pre
-
-
-#def saving_E_existing_new(agent, environment, m_t, rho_t):
-#    """
-#    Savings, wealth and consumption choices of existing entrepreneurs
-#    """
-#    # Environment variables
-#    r = environment.r
-#    g_t = environment.g_t
-#    # Agent variables
-#    age_max = agent.age_max
-#    age = agent.age
-#    age_T = agent.age_T
-#    beta = agent.beta
-#    sigma = agent.sigma
-#    current_wealth = agent.wealth
-#
-#    beta_adj = beta * (1.+g_t)**(1.-sigma)
-#
-#    ratio = np.zeros(age_max)
-#    rr = np.zeros(age_max)
-#    aa = np.zeros(age_max)
-#    wealth = np.zeros(age_max)
-#    consumption = np.zeros(age_max)
-#    wealth[age-1] = current_wealth
-#    rho_t_ad = adjust_rho(rho_t, environment)
-#
-#    e = Entrepreneur(age=age)
-#    e.set_income_stream(m_t, g=g_t)
-#
-#    A = pv_income(e.income_stream, age, r)
-#    if age < age_T:
-#        A += current_wealth * (1.+r)
-#        print(r)
-#    else:
-#        A += current_wealth * (1.+rho_t_ad[0])
-#        print(rho_t_ad[0])
-#    print('A: {}'.format(A))
-#
-#    factor_by_age = dict()
-#    factor_by_age[1] = 1.
-#    if e.age + 1 < e.age_T:
-#        factor_by_age[e.age+1] = (beta*(1.+r))**(1./sigma)/(1.+r)
-#    f_t = (beta*(1.+rho_t_ad))**(1./sigma)/(1.+rho_t_ad)
-#    for i in range(e.age_T, e.age_max+1):
-#        factor_by_age[i] = f_t[i-e.age]
-#    factor = income_steps(factor_by_age, e.age_max)
-#    factor_cum = factor.cumprod()
-#    life_span = e.age_max - e.age + 1  # includes current age
-#    ratio = factor_cum[-life_span:]
-#    # print('Ratio (old): {}'.format(ratio))
-#
-#    # optimal consumption and savings
-#    for i in range(age, age_max+1):
-#        if i == age:
-#            consumption[i-1] = A/(np.sum(ratio))
-#            if i < age_T:
-#                wealth[i] = (
-#                        (wealth[i-1]*(1.0+r)+m_t[i-age]-consumption[i-1])
-#                        / (1.0+g_t)
-#                        )
-#            elif i < age_max:
-#                wealth[i] = (
-#                        (wealth[i-1]*(1.0+rho_t_ad[i-age])-consumption[i-1])
-#                        / (1.0+g_t)
-#                        )
-#        elif i < age_T:  # being manager
-#            rr[i-1] = r
-#            aa[i-1] = i
-#            consumption[i-1] = (
-#                    (beta_adj*(1.+r)/(1+g_t))**(1./sigma)
-#                    * consumption[i-2]
-#                    )
-#            wealth[i] = (
-#                    (wealth[i-1]*(1.+r)+m_t[i-age]-consumption[i-1])
-#                    / (1.+g_t)
-#                    )
-#        else:  # become firm owner
-#            rr[i-1] = rho_t_ad[i-age]
-#            aa[i-1] = i
-#            consumption[i-1] = (
-#                    (beta_adj*(1.+rho_t_ad[i-age])/(1.+g_t))**(1./sigma)
-#                    * consumption[i-2]
-#                    )
-#            if i < age_max:
-#                wealth[i] = (
-#                        (wealth[i-1]*(1.0+rho_t_ad[i-age])-consumption[i-1])
-#                        / (1.0+g_t)
-#                        )
-#    # print('r_t (old)')
-#    # print(rr)
-#    # print('Ages (old)')
-#    # print(aa)
-#    return wealth, consumption
-
+# print(tr3[0])
