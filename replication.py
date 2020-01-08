@@ -612,9 +612,20 @@ iteration = 0
 # initial guess = true results
 initial_guess = loadmat(os.path.join('original_files', 'data_result.mat'))
 
-w_t = initial_guess['w_t'].flatten()*2
-m_t = initial_guess['m_t'].flatten()*2
-rho_t = initial_guess['rho_t'].flatten()*2
+w_t = initial_guess['w_t'].flatten()
+m_t = initial_guess['m_t'].flatten()
+rho_t = initial_guess['rho_t'].flatten()
+
+# Parameters
+r = params.r
+eta = params.eta
+ice_t = params.ice_t
+alpha = params.alpha
+ksi = params.ksi
+psi = params.psi
+delta = params.delta
+g_n = params.g_n
+g_t = params.g_t
 
 while dev_max > tol and iteration < iter_max:
     # an indicator for the end of transition
@@ -692,29 +703,24 @@ while dev_max > tol and iteration < iter_max:
 
         # capital and labor in the E sector
         for i in range(params.age_T-1, params.age_max):
-            if rho_t[t] >= params.r / (1.-params.ice_t[t]):  # borrowing is profitable
+            if rho_t[t] >= r / (1.-ice_t[t]):  # borrowing is profitable
                 loan_ratio[t] = (
-                        params.eta * (1.+rho_t[t])
-                        / (
-                                1. + params.r/(1.0-params.ice_t[t])
-                                - params.eta*(rho_t[t]-params.r
-                                              / (1.-params.ice_t[t]))
-                        )
+                        eta * (1.+rho_t[t])
+                        / (1.+r/(1.-ice_t[t])-eta*(rho_t[t]-r/(1.-ice_t[t])))
                         )  # loan asset ratio
                 loan[t, i] = wealth_E[t, i] * loan_ratio[t]
                 # entrepreneurial capital owned by an entrepreneur at time t
                 # with age i
                 ke[t, i] = wealth_E[t, i] + loan[t, i]
             else:  # borrowing is not profitable
-                loan[t, i] = 0.0
+                loan[t, i] = 0.
                 # entrepreneurial capital owned by an entrepreneur at time t
                 # with age i
                 ke[t, i] = wealth_E(t, i)
 
             # labor employed by an entrepreneur at time with age i
             ne[t, i] = ke[t, i] * (
-                    (1.-params.alpha)*(1.-params.psi)*params.ksi**(1.-params.alpha)/w_t[t]
-                    )**(1./params.alpha)
+                    (1.-alpha)*(1.-psi)*ksi**(1.-alpha)/w_t[t])**(1./alpha)
             # total capital owned by all entrepreneurs at time with age i
             KE[t, i] = params.e_pre * pop_weight[i] * ke[t, i]
             # total labor employed by all entrepreneurs at time with age i
@@ -732,8 +738,8 @@ while dev_max > tol and iteration < iter_max:
         # factor prices
         # wage rate
         w_t_new[t] = (
-                (1.-params.psi) * (1.-params.alpha) * (KE_t[t]/NE_t[t])**params.alpha
-                * params.ksi**(1.-params.alpha)
+                (1.-psi) * (1.-alpha) * (KE_t[t]/NE_t[t])**alpha
+                * ksi**(1.-alpha)
                 )
 
         # locate the end of the transition
@@ -745,29 +751,30 @@ while dev_max > tol and iteration < iter_max:
 
         if I_end == 0:
             w_t_new[t] = (
-                    (1.-params.alpha) * (params.alpha/(params.r/(1.-params.ice_t[t])+params.delta))**(params.alpha/(1.-params.alpha))
+                    (1.-alpha)
+                    * (alpha/(r/(1.-ice_t[t])+delta))**(alpha/(1.-alpha))
                     )  # wage rate
         else:
             NE_t[t] = N_t[t]
             w_t_new[t] = (
-                    (1.-params.psi) * (1.-params.alpha) * (KE_t[t]/N_t[t])**params.alpha
-                    * params.ksi**(1.-params.alpha)
+                    (1.-psi) * (1.-alpha) * (KE_t[t]/N_t[t])**alpha
+                    * ksi**(1.-alpha)
                     )  # wage rate
 
         # the internal rate of return for entrepreneurs
         rho_t_new[t] = np.max(
-                [params.r,
+                [r,
                  (
-                         (1.-params.psi)**(1./params.alpha) * params.ksi**((1.-params.alpha)/params.alpha)
-                         * ((1.-params.alpha)/w_t_new[t])**((1.-params.alpha)/params.alpha) * params.alpha
-                         - params.delta
+                         (1.-psi)**(1./alpha) * ksi**((1.-alpha)/alpha)
+                         * ((1.-alpha)/w_t_new[t])**((1.-alpha)/alpha) * alpha
+                         - delta
                  )
                  ]
                 )
         # aggregate output in the E sector
-        YE_t[t] = KE_t[t]**params.alpha * (params.ksi*NE_t[t])**(1.-params.alpha)
+        YE_t[t] = KE_t[t]**alpha * (ksi*NE_t[t])**(1.-alpha)
         # total managerial compensations
-        M_t[t] = params.psi * YE_t[t]
+        M_t[t] = psi * YE_t[t]
         # compensations for young entrepreneurs
         m_t_new[t] = M_t[t] / E_t
 
@@ -884,11 +891,11 @@ for t in range(params.time_max):
     # the F sector
     if NE_t[t] < N_t[t]:
         KF_t[t] = (
-                (params.alpha/(params.r/(1.-params.ice_t[t])+params.delta))**(1./(1.-params.alpha))
+                (alpha/(r/(1.-ice_t[t])+delta))**(1./(1.-alpha))
                 * (N_t[t]-NE_t[t])
                 )  # aggregate capital in the F sector
         YF_t[t] = (
-                KF_t[t]**params.alpha * (N_t[t]-NE_t[t])**(1.-params.alpha)
+                KF_t[t]**alpha * (N_t[t]-NE_t[t])**(1.-alpha)
                 )  # aggregate output in the F sector
         NF_t[t] = N_t[t] - NE_t[t]  # aggregate workers in the F sector
     else:
@@ -908,10 +915,10 @@ for t in range(params.time_max-1):
     NE_N_t[t] = NE_t[t] / N_t[t]
 
     # computing investment in the F sector
-    IF_t[t] = (1.+params.g_t)*(1.+params.g_n)*KF_t[t+1] - (1.-params.delta)*KF_t[t]
+    IF_t[t] = (1.+g_t)*(1.+g_n)*KF_t[t+1] - (1.-delta)*KF_t[t]
 
     # computing investment in the E sector
-    IE_t[t] = (1.+params.g_t)*(1.+params.g_n)*KE_t[t+1] - (1.-params.delta)*KE_t[t]
+    IE_t[t] = (1.+g_t)*(1.+g_n)*KE_t[t+1] - (1.-delta)*KE_t[t]
 
     # investment rates in the two sectors
     if YF_t[t] > 0:
@@ -921,12 +928,12 @@ for t in range(params.time_max-1):
     IE_Y_t[t] = IE_t[t] / YE_t[t]
 
     # computing workers' savings
-    SF_t[t] = (1.+params.g_t)*(1.+params.g_n)*AF_t[t+1] - AF_t[t] + params.delta*KF_t[t]
+    SF_t[t] = (1.+g_t)*(1.+g_n)*AF_t[t+1] - AF_t[t] + delta*KF_t[t]
     if YF_t[t] > 0:
         SF_YF_t[t] = SF_t[t] / YF_t[t]
 
     # computing enterpreneurs' savings
-    SE_t[t] = (1.+params.g_t)*(1.+params.g_n)*AE_t[t+1] - AE_t[t] + params.delta*KE_t[t]
+    SE_t[t] = (1.+g_t)*(1.+g_n)*AE_t[t+1] - AE_t[t] + delta*KE_t[t]
     SE_YE_t[t] = SE_t[t] / YE_t[t]
 
     # aggregate output per capita
@@ -948,10 +955,10 @@ for t in range(params.time_max-1):
     if t > 0:
         TFP_t[t] = (
                 Y_t[t]/Y_t[t-1]
-                - params.alpha*K_t[t]/K_t[t-1]
-                - (1.-params.alpha)*N_t[t]/N_t[t-1]
+                - alpha*K_t[t]/K_t[t-1]
+                - (1.-alpha)*N_t[t]/N_t[t-1]
                 )
-        YG_t[t] = (Y_t[t]/Y_t[t-1]-1.) + params.g_n + params.g_t
+        YG_t[t] = (Y_t[t]/Y_t[t-1]-1.) + g_n + g_t
 
 # Figures
 time_begin = 0
@@ -962,7 +969,7 @@ tt = [time_begin, time_end]
 end_year = 2012
 
 # Panel 1
-r_F = params.r / (1.-params.ice_t)
+r_F = r / (1.-ice_t)
 t = np.arange(1992, 2013, 1)
 s = r_F[:21]
 fig, ax = plt.subplots()
@@ -972,6 +979,7 @@ ax.set(xlabel='year',
 
 ax.set_xlim(1992, 2012)
 ax.grid()
+plt.xticks(np.arange(1992, 2013, step=2))
 plt.show()
 
 # Panel 2
@@ -989,6 +997,7 @@ ax.set(xlabel='year',
 ax.set_xlim(1992, 2012)
 ax.grid()
 ax.legend(loc='upper left')
+plt.xticks(np.arange(1992, 2013, step=2))
 plt.show()
 
 # Panel 3
@@ -1006,6 +1015,7 @@ ax.set(xlabel='year',
 ax.set_xlim(1992, 2012)
 ax.grid()
 ax.legend(loc='upper left')
+plt.xticks(np.arange(1992, 2013, step=2))
 plt.show()
 
 # Panel 4
@@ -1023,6 +1033,7 @@ ax.set(xlabel='year',
 ax.set_xlim(1992, 2012)
 ax.grid()
 ax.legend(loc='upper left')
+plt.xticks(np.arange(1992, 2013, step=2))
 plt.show()
 
 # Panel 5
@@ -1040,6 +1051,7 @@ ax.set(xlabel='year',
 ax.set_xlim(1992, 2012)
 ax.grid()
 ax.legend(loc='upper left')
+plt.xticks(np.arange(1992, 2013, step=2))
 plt.show()
 
 # Panel 6
@@ -1054,6 +1066,7 @@ ax.set(xlabel='year',
 ax.set_xlim(1992, 2012)
 ax.grid()
 ax.legend(loc='upper left')
+plt.xticks(np.arange(1992, 2013, step=2))
 plt.show()
 
 # Panel 5
@@ -1071,4 +1084,5 @@ ax.set(xlabel='year',
 ax.set_xlim(1992, 2012)
 ax.grid()
 ax.legend(loc='upper left')
+plt.xticks(np.arange(1992, 2013, step=2))
 plt.show()
