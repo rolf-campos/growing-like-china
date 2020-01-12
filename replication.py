@@ -10,77 +10,11 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import os
-import pandas as pd
 import pprint
 from abc import ABC, abstractmethod
-from data import DATA_sav, DATA_inv, DATA_res, DATA_em_sh, DATA_SI_Y
+from data import DATA
 from scipy.io import loadmat
-
-
-# Utility functions
-def pv(stream, r_t, return_flows=False):
-    """
-    Calculates the present value of any <stream> of flows
-    using the discount rate <r_t> (works for r_t scalar or size of <stream>)
-    """
-    stream = np.asarray(stream)
-    r_t = np.asarray(r_t)
-    T = stream.size
-    if r_t.size == 1 and r_t.size < T:
-        r = r_t.sum()
-        r_t = np.array(T*[r])
-    assert stream.size == r_t.size, "stream = {}, r_t = {}".format(
-            stream.size,
-            r_t.size)
-    # factor_t = np.array([(1.+r_t)**(-t) for t in range(T)])
-    tt = np.array([-t for t in range(T)])
-    factor_t = (np.ones(T) + r_t)**tt
-    factor_t = np.ones(T) / (np.ones(T) + r_t)
-    factor_t[0] = 1.
-    flows = stream * factor_t.cumprod()
-    if return_flows:
-        return flows.sum(), flows
-    else:
-        return flows.sum()
-
-
-def transition_vector(length, v0, v1, t0, t1, speed=1):
-    """
-    Returns a vector of size <length> that transitions from <v0> to <v1>
-    starting at date <t0> and completing the transition at <t1>.
-    Speed controls the speed; <speed> = 1 is linear.
-    Vector is zero-indexed, so position t corresponds to date t+1.
-    """
-    assert t0 < t1, "t0={} < t1={}".format(t0, t1)
-    assert t1 <= length, "t1={} <= length={}".format(t1, length)
-    T = length
-    vector = np.empty(T)
-    vector[:t0] = v0
-    vector[t1-1:] = v1
-    for t in range(t0, t1):
-        weight = ((t-t0) / (t1-t0))**speed
-        vector[t] = (1.0-weight)*v0 + weight*v1
-    return vector
-
-
-def steps(d, size):
-    """
-    Produces a np.array of length <size> that increases in steps
-    A dictionary
-        d = {idx_1: val_1, idx_2: val_2,...}
-    produces
-        np.array([0, 0, val_1,..., val_1, val_2,..., val_2,...])
-    where the switches occur at idx_1, idx_2,...
-    Requirement 0 <= idx_j < size, for all j is enforced
-    """
-    a = np.zeros(size)
-    if d:  # an empty dictionary is allowed
-        locations = sorted(list(d.keys()))
-        assert locations[0] >= 0, "An index in dictionary is out of bounds"
-        assert locations[-1] < size, "An index in dictionary is out of bounds"
-        for i in locations:
-            a[i:] = d[i]
-    return a
+from utils import AttributeDict, pv, steps, transition_vector
 
 
 class Parameters:
@@ -532,7 +466,7 @@ class Entrepreneur(Agent):
         W = self.wealth * (1.+r_t[0])
         income = self.income(m_t, g=environment.g_t)
         income = income[self.age-1:]  # get rid of past
-        pv_income = pv(income, environment.r)
+        pv_income = pv(income, r_t)
         wealth_0 = pv_income + W
 
         euler = self.euler(r_t, g=False)
@@ -555,534 +489,627 @@ class Entrepreneur(Agent):
         return {'consumption': cons, 'wealth': w}
 
 
-# Main functions
-def life_cycle_profile_pre(environment):
-    # Dummy worker to obtain age_max and a vector of wages
-    w1 = Worker(age=1, wage=environment.w_pre)
-    age_max = w1.age_max
-    wages = w1.income0(g=0.)
-
-    wealth_pre = np.zeros(age_max)
-    consumption_pre = np.zeros(age_max)
-    sr_pre = np.zeros(age_max)
-    for i in range(age_max):
-        age = i + 1
-        wage = wages[i]
-        wealth = wealth_pre[i]
-        w = Worker(age=age, wage=wage, wealth=wealth)
-        wealth_next, sr_pre[i], consumption_pre[i] = w.optimize0(environment)
-        if age < age_max:
-            wealth_pre[i+1] = wealth_next
-    return wealth_pre
-
-
-params = Parameters()
-wealth_pre_new = params.initial_ratio * life_cycle_profile_pre(params)
-wealth_pre_E_new = params.initial_ratio_E * life_cycle_profile_pre(params)
-
-# Compare with Matlab data
-data_pre = loadmat(os.path.join('original_files', 'data_pre.mat'))
-wealth_pre_2 = data_pre['wealth_pre'].flatten()
-check_1 = pd.DataFrame(
-        {'Python new': wealth_pre_new, 'Matlab': wealth_pre_2})
-check_1.plot(title='wealth_pre', style=['y-', 'k--'])
-
-# Compare with Matlab data
-data_pre_E = loadmat(os.path.join('original_files', 'data_pre_E.mat'))
-wealth_pre_E_2 = data_pre_E['wealth_pre_E'].flatten()
-check_1 = pd.DataFrame(
-        {'Python new': wealth_pre_E_new, 'Matlab': wealth_pre_E_2})
-check_1.plot(title='wealth_pre_E', style=['y-', 'k--'])
-
-params = Parameters()
-
-pop_weight = params.demographic_distribution()
-# the initial size of workers before retirement
-nw_pre = np.sum(pop_weight[0:params.age_T_w-1]) * params.n_pre
-# the initial size of entrepreneurs after being firm owner
-ee_pre = np.sum(pop_weight[params.age_T-1:params.age_max]) * params.e_pre
-
-# iteration choices
-relax = 0.75
-iter_max = 1000
-tol = 1e-4
-dev_max = 1.
-iteration = 0
-
-# initial guess = true results
-initial_guess = loadmat(os.path.join('original_files', 'data_result.mat'))
-
-w_t = initial_guess['w_t'].flatten()
-m_t = initial_guess['m_t'].flatten()
-rho_t = initial_guess['rho_t'].flatten()
-
-# Parameters
-r = params.r
-eta = params.eta
-ice_t = params.ice_t
-alpha = params.alpha
-ksi = params.ksi
-psi = params.psi
-delta = params.delta
-g_n = params.g_n
-g_t = params.g_t
-
-while dev_max > tol and iteration < iter_max:
-    # an indicator for the end of transition
-    I_end = 0
-
-    # Initialize all vectors and matrices
-    SHAPE_LONG_WIDE = (params.time_max+params.age_max-1, params.age_max)
-    SHAPE_SHORT_WIDE = (params.time_max, params.age_max)
-    SHAPE_SHORT = params.time_max
-    SHAPE_LONG = params.time_max + params.age_max - 1
-
-    ae = np.zeros(SHAPE_SHORT_WIDE)
-    AE = np.zeros(SHAPE_SHORT_WIDE)
-    loan = np.zeros(SHAPE_SHORT_WIDE)
-    ke = np.zeros(SHAPE_SHORT_WIDE)
-    ne = np.zeros(SHAPE_SHORT_WIDE)
-    KE = np.zeros(SHAPE_SHORT_WIDE)
-    NE = np.zeros(SHAPE_SHORT_WIDE)
-    LE = np.zeros(SHAPE_SHORT_WIDE)
-
-    wealth_E = np.zeros(SHAPE_LONG_WIDE)
-    consumption_E = np.zeros(SHAPE_LONG_WIDE)
-
-    AE_t = np.zeros(SHAPE_SHORT)
-    NE_t = np.zeros(SHAPE_SHORT)
-    KE_t = np.zeros(SHAPE_SHORT)
-    LE_t = np.zeros(SHAPE_SHORT)
-    N_t = np.zeros(SHAPE_SHORT)
-    YE_t = np.zeros(SHAPE_SHORT)
-    M_t = np.zeros(SHAPE_SHORT)
-    loan_ratio = np.zeros(SHAPE_SHORT)
-
-    w_t_new = np.zeros(SHAPE_LONG)
-    rho_t_new = np.zeros(SHAPE_LONG)
-    m_t_new = np.zeros(SHAPE_LONG)
-
-    # existing entrepreneurs
-    # includes entrepreneurs aged age_max but not aged one (they would be new)
-    for age in range(2, params.age_max+1):
-        ii = age - 1
-        # computing existing entrepreneurs' wealth
-        # given the guess of m_t and rho_t
-        e = Entrepreneur(age=age, wealth=wealth_pre_E_new[ii])
-        result = e.optimize(params, w_t, m_t, rho_t)
-        consumption, wealth = result['consumption'], result['wealth']
-        # wealth and cons time series for the existing enterpreneurs
-        for tt in range(params.age_max-ii):
-            wealth_E[tt, ii+tt] = wealth[tt]
-            consumption_E[tt, ii+tt] = consumption[tt]
-
-    # newly-born entrepreneurs
-    for tt in range(params.time_max):
-        year = tt+1
-        e = Entrepreneur(age=1, wealth=0., year=year)
-        result = e.optimize(params, w_t, m_t, rho_t)
-        consumption, wealth = result['consumption'], result['wealth']
-        # wealth and cons time series for the existing enterpreneurs
-        for ii in range(params.age_max):
-            wealth_E[tt+ii, ii] = wealth[ii]
-            consumption_E[tt+ii, ii] = consumption[ii]
-
-    # Update new factor price time series
-    for t in range(params.time_max):
-
-        # Fixed size of managers
-        E_t = params.e_pre - ee_pre
-
-        # Assets in the E sector
-        for i in range(params.age_max):
-            # entrepreneurial capital owned by an entprepreneur at time t
-            # with age i
-            ae[t, i] = wealth_E[t, i]
-            # total capital owned by all entrepreneurs at time t with age i
-            AE[t, i] = params.e_pre * pop_weight[i] * ae[t, i]
-
-        # capital and labor in the E sector
-        for i in range(params.age_T-1, params.age_max):
-            if rho_t[t] >= r / (1.-ice_t[t]):  # borrowing is profitable
-                loan_ratio[t] = (
-                        eta * (1.+rho_t[t])
-                        / (1.+r/(1.-ice_t[t])-eta*(rho_t[t]-r/(1.-ice_t[t])))
-                        )  # loan asset ratio
-                loan[t, i] = wealth_E[t, i] * loan_ratio[t]
-                # entrepreneurial capital owned by an entrepreneur at time t
-                # with age i
-                ke[t, i] = wealth_E[t, i] + loan[t, i]
-            else:  # borrowing is not profitable
-                loan[t, i] = 0.
-                # entrepreneurial capital owned by an entrepreneur at time t
-                # with age i
-                ke[t, i] = wealth_E(t, i)
-
-            # labor employed by an entrepreneur at time with age i
-            ne[t, i] = ke[t, i] * (
-                    (1.-alpha)*(1.-psi)*ksi**(1.-alpha)/w_t[t])**(1./alpha)
-            # total capital owned by all entrepreneurs at time with age i
-            KE[t, i] = params.e_pre * pop_weight[i] * ke[t, i]
-            # total labor employed by all entrepreneurs at time with age i
-            NE[t, i] = params.e_pre * pop_weight[i] * ne[t, i]
-            # total loan
-            LE[t, i] = params.e_pre * pop_weight[i] * loan[t, i]
-
-        # resource allocation
-        AE_t[t] = AE[t, :].sum()  # aggregate capital in the E sector
-        NE_t[t] = NE[t, :].sum()  # aggregate employment in the E sector
-        KE_t[t] = KE[t, :].sum()  # when rho > r
-        LE_t[t] = LE[t, :].sum()  # total loan
-        N_t[t] = nw_pre  # the size of workers (no migration)
-
-        # factor prices
-        # wage rate
-        w_t_new[t] = (
-                (1.-psi) * (1.-alpha) * (KE_t[t]/NE_t[t])**alpha
-                * ksi**(1.-alpha)
-                )
-
-        # locate the end of the transition
-        if NE_t[t] >= N_t[t] and I_end == 0:
-            I_end = 1
-            I_t = t
-        elif I_end == 1:
-            I_end = 1
-
-        if I_end == 0:
-            w_t_new[t] = (
-                    (1.-alpha)
-                    * (alpha/(r/(1.-ice_t[t])+delta))**(alpha/(1.-alpha))
-                    )  # wage rate
-        else:
-            NE_t[t] = N_t[t]
-            w_t_new[t] = (
-                    (1.-psi) * (1.-alpha) * (KE_t[t]/N_t[t])**alpha
-                    * ksi**(1.-alpha)
-                    )  # wage rate
-
-        # the internal rate of return for entrepreneurs
-        rho_t_new[t] = np.max(
-                [r,
-                 (
-                         (1.-psi)**(1./alpha) * ksi**((1.-alpha)/alpha)
-                         * ((1.-alpha)/w_t_new[t])**((1.-alpha)/alpha) * alpha
-                         - delta
-                 )
-                 ]
-                )
-        # aggregate output in the E sector
-        YE_t[t] = KE_t[t]**alpha * (ksi*NE_t[t])**(1.-alpha)
-        # total managerial compensations
-        M_t[t] = psi * YE_t[t]
-        # compensations for young entrepreneurs
-        m_t_new[t] = M_t[t] / E_t
-
-    # steady state assumption
-    w_t_new[params.time_max:] = w_t_new[params.time_max-1]
-    rho_t_new[params.time_max:] = rho_t_new[params.time_max-1]
-    m_t_new[params.time_max:] = m_t_new[params.time_max-1]
-
-    # deviation
-    dev_w = np.abs(w_t_new-w_t)
-    dev_rho = np.abs(rho_t_new-rho_t)
-    dev_m = np.abs(m_t_new-m_t)
-    dev_w_max = dev_w.max()
-    dev_rho_max = dev_rho.max()
-    dev_m_max = dev_m.max()
-    dev_max = np.array([dev_w_max, dev_rho_max, dev_m_max]).max()
-
-    # renew
-    w_t = w_t*relax + w_t_new*(1.-relax)
-    rho_t = rho_t*relax + rho_t_new*(1.-relax)
-    m_t = m_t*relax + m_t_new*(1.-relax)
-
-    if int(5*np.floor(iteration/5)) == iteration:
-        print("Iteration: {0}, Max deviation: {1}".format(iteration, dev_max))
-
-    iteration += 1
-
-# Compare to the original results
-w_t_orig = initial_guess['w_t'].flatten()
-m_t_orig = initial_guess['m_t'].flatten()
-rho_t_orig = initial_guess['rho_t'].flatten()
-
-check = pd.DataFrame(
-        {'Python new': rho_t, 'Matlab': rho_t_orig})
-check.plot(title='rho_t', style=['y-', 'k--'])
-
-check = pd.DataFrame(
-        {'Python new': w_t, 'Matlab': w_t_orig})
-check.plot(title='w_t', style=['y-', 'k--'])
-
-check = pd.DataFrame(
-        {'Python new': m_t, 'Matlab': m_t_orig})
-check.plot(title='m_t', style=['y-', 'k--'])
-
-# Initialize all vectors and matrices
-wealth_F = np.zeros(SHAPE_LONG_WIDE)
-consumption_F = np.zeros(SHAPE_LONG_WIDE)
-N_t = np.zeros(SHAPE_SHORT)
-AF = np.zeros(SHAPE_SHORT_WIDE)
-CF = np.zeros(SHAPE_SHORT_WIDE)
-CE = np.zeros(SHAPE_SHORT_WIDE)
-AF_t = np.zeros(SHAPE_SHORT)
-CF_t = np.zeros(SHAPE_SHORT)
-CE_t = np.zeros(SHAPE_SHORT)
-KF_t = np.zeros(SHAPE_SHORT)
-YF_t = np.zeros(SHAPE_SHORT)
-NF_t = np.zeros(SHAPE_SHORT)
-NE_N_t = np.zeros(SHAPE_SHORT)
-IF_t = np.zeros(SHAPE_SHORT)
-IE_t = np.zeros(SHAPE_SHORT)
-IF_Y_t = np.zeros(SHAPE_SHORT)
-IE_Y_t = np.zeros(SHAPE_SHORT)
-SF_t = np.zeros(SHAPE_SHORT)
-SF_YF_t = np.zeros(SHAPE_SHORT)
-SE_t = np.zeros(SHAPE_SHORT)
-SE_YE_t = np.zeros(SHAPE_SHORT)
-Y_N_t = np.zeros(SHAPE_SHORT)
-I_Y_t = np.zeros(SHAPE_SHORT)
-S_Y_t = np.zeros(SHAPE_SHORT)
-K_Y_t = np.zeros(SHAPE_SHORT)
-FA_Y_t = np.zeros(SHAPE_SHORT)
-BoP_Y_t = np.zeros(SHAPE_SHORT)
-TFP_t = np.zeros(SHAPE_SHORT)
-YG_t = np.zeros(SHAPE_SHORT)
-
-# workers' savings and assets
-for age in range(2, params.age_max+1):
-    ii = age - 1
-    # computing existing workers' wealth given the guess of m_t and rho_t
-    w = Worker(age=age, wealth=wealth_pre_new[ii])
-    result = w.optimize(params, w_t, m_t, rho_t)
-    consumption, wealth = result['consumption'], result['wealth']
-    # wealth and cons time series for the existing workers
-    for tt in range(params.age_max-ii):
-        wealth_F[tt, ii+tt] = wealth[tt]
-        consumption_F[tt, ii+tt] = consumption[tt]
-
-# newly-born workers
-for tt in range(params.time_max):
-    year = tt + 1
-    w = Worker(age=1, wealth=0., year=year)
-    result = w.optimize(params, w_t, m_t, rho_t)
-    consumption, wealth = result['consumption'], result['wealth']
-    for ii in range(params.age_max):
-        wealth_F[tt+ii, ii] = wealth[ii]
-        consumption_F[tt+ii, ii] = consumption[ii]
-
-# demographic structure and others
-for t in range(params.time_max):
-
-    # no migration
-    N_t[t] = nw_pre
-
-    # total assets of workers and total consumptions
-    for i in range(params.age_max):
-        AF[t, i] = params.n_pre * pop_weight[i] * wealth_F[t, i]
-        CF[t, i] = params.n_pre * pop_weight[i] * consumption_F[t, i]
-        CE[t, i] = params.e_pre * pop_weight[i] * consumption_E[t, i]
-
-    AF_t[t] = AF[t, :].sum()  # aggregate capital in the E sector
-    CF_t[t] = CF[t, :].sum()  # aggregate consumption in the F sector
-    CE_t[t] = CE[t, :].sum()  # aggregate consumption in the E sector
-
-    # the F sector
-    if NE_t[t] < N_t[t]:
-        KF_t[t] = (
-                (alpha/(r/(1.-ice_t[t])+delta))**(1./(1.-alpha))
-                * (N_t[t]-NE_t[t])
-                )  # aggregate capital in the F sector
-        YF_t[t] = (
-                KF_t[t]**alpha * (N_t[t]-NE_t[t])**(1.-alpha)
-                )  # aggregate output in the F sector
-        NF_t[t] = N_t[t] - NE_t[t]  # aggregate workers in the F sector
-    else:
-        KF_t[t] = 0.0
-        YF_t[t] = 0.0
-        NF_t[t] = 0.0
-
-
-# aggregation
-Y_t = YF_t + YE_t
-K_t = KF_t + KE_t
-C_t = CF_t + CE_t
-
-for t in range(params.time_max-1):
-
-    # private employment share
-    NE_N_t[t] = NE_t[t] / N_t[t]
-
-    # computing investment in the F sector
-    IF_t[t] = (1.+g_t)*(1.+g_n)*KF_t[t+1] - (1.-delta)*KF_t[t]
-
-    # computing investment in the E sector
-    IE_t[t] = (1.+g_t)*(1.+g_n)*KE_t[t+1] - (1.-delta)*KE_t[t]
-
-    # investment rates in the two sectors
-    if YF_t[t] > 0:
-        IF_Y_t[t] = IF_t[t] / YF_t[t]
-    else:
-        IF_Y_t[t] = 0.0
-    IE_Y_t[t] = IE_t[t] / YE_t[t]
-
-    # computing workers' savings
-    SF_t[t] = (1.+g_t)*(1.+g_n)*AF_t[t+1] - AF_t[t] + delta*KF_t[t]
-    if YF_t[t] > 0:
-        SF_YF_t[t] = SF_t[t] / YF_t[t]
-
-    # computing enterpreneurs' savings
-    SE_t[t] = (1.+g_t)*(1.+g_n)*AE_t[t+1] - AE_t[t] + delta*KE_t[t]
-    SE_YE_t[t] = SE_t[t] / YE_t[t]
-
-    # aggregate output per capita
-    Y_N_t[t] = Y_t[t] / N_t[t]
-
-    # aggregate investment rate
-    I_Y_t[t] = (IF_t[t]+IE_t[t]) / Y_t[t]
-
-    # aggregate saving rate
-    S_Y_t[t] = (SF_t[t]+SE_t[t]) / Y_t[t]
-
-    # capital output ratio
-    K_Y_t[t] = K_t[t] / Y_t[t]
-
-    # capital outflows
-    FA_Y_t[t] = (AE_t[t]+AF_t[t]-K_t[t]) / Y_t[t]  # stock
-    BoP_Y_t[t] = S_Y_t[t] - I_Y_t[t]  # flow
-
-    if t > 0:
-        TFP_t[t] = (
-                Y_t[t]/Y_t[t-1]
-                - alpha*K_t[t]/K_t[t-1]
-                - (1.-alpha)*N_t[t]/N_t[t-1]
-                )
-        YG_t[t] = (Y_t[t]/Y_t[t-1]-1.) + g_n + g_t
-
-# Figures
-time_begin = 0
-time_end = 100  # ; time_max-1;
-tt = [time_begin, time_end]
-
-# end year
-end_year = 2012
-
-# Panel 1
-r_F = r / (1.-ice_t)
-t = np.arange(1992, 2013, 1)
-s = r_F[:21]
-fig, ax = plt.subplots()
-ax.plot(t, s)
-ax.set(xlabel='year',
-       title='Panel 1: rate of return in F firms')
-
-ax.set_xlim(1992, 2012)
-ax.grid()
-plt.xticks(np.arange(1992, 2013, step=2))
-plt.show()
-
-# Panel 2
-fig, ax = plt.subplots()
-t = np.arange(1992, end_year+1, 1)
-s = NE_N_t[:len(t)]
-ax.plot(t, s, label='model')
-t = np.arange(1998, 2008, 1)
-s = DATA_em_sh
-ax.plot(t, s, label='firm data')
-
-ax.set(xlabel='year',
-       title='Panel 2: E firm employment share')
-
-ax.set_xlim(1992, 2012)
-ax.grid()
-ax.legend(loc='upper left')
-plt.xticks(np.arange(1992, 2013, step=2))
-plt.show()
-
-# Panel 3
-fig, ax = plt.subplots()
-t = np.arange(1992, end_year+1, 1)
-s = S_Y_t[:len(t)]
-ax.plot(t, s, label='model')
-t = np.arange(1992, 2008, 1)
-s = DATA_sav
-ax.plot(t, s, label='data')
-
-ax.set(xlabel='year',
-       title='Panel 3: aggregate saving rate')
-
-ax.set_xlim(1992, 2012)
-ax.grid()
-ax.legend(loc='upper left')
-plt.xticks(np.arange(1992, 2013, step=2))
-plt.show()
-
-# Panel 4
-fig, ax = plt.subplots()
-t = np.arange(1992, end_year+1, 1)
-s = I_Y_t[:len(t)]
-ax.plot(t, s, label='model')
-t = np.arange(1992, 2008, 1)
-s = DATA_inv
-ax.plot(t, s, label='data')
-
-ax.set(xlabel='year',
-       title='Panel 4: aggregate investment rate')
-
-ax.set_xlim(1992, 2012)
-ax.grid()
-ax.legend(loc='upper left')
-plt.xticks(np.arange(1992, 2013, step=2))
-plt.show()
-
-# Panel 5
-fig, ax = plt.subplots()
-t = np.arange(1992, end_year+1, 1)
-s = FA_Y_t[:len(t)]
-ax.plot(t, s, label='model')
-t = np.arange(1992, 2008, 1)
-s = DATA_res
-ax.plot(t, s, label='data')
-
-ax.set(xlabel='year',
-       title='Panel 5: foreign reserves / GDP')
-
-ax.set_xlim(1992, 2012)
-ax.grid()
-ax.legend(loc='upper left')
-plt.xticks(np.arange(1992, 2013, step=2))
-plt.show()
-
-# Panel 6
-fig, ax = plt.subplots()
-t = np.arange(1992, end_year+1, 1)
-s = TFP_t[:len(t)]+(1.-params.alpha)*params.g_t
-ax.plot(t, s, label='model')
-
-ax.set(xlabel='year',
-       title='Panel 6: TFP growth rate')
-
-ax.set_xlim(1992, 2012)
-ax.grid()
-ax.legend(loc='upper left')
-plt.xticks(np.arange(1992, 2013, step=2))
-plt.show()
-
-# Panel 5
-fig, ax = plt.subplots()
-t = np.arange(1992, end_year+1, 1)
-s = BoP_Y_t[:len(t)]
-ax.plot(t, s, label='model')
-t = np.arange(1992, 2008, 1)
-s = DATA_SI_Y
-ax.plot(t, s, label='data')
-
-ax.set(xlabel='year',
-       title='Panel 7: net export GDP ratio')
-
-ax.set_xlim(1992, 2012)
-ax.grid()
-ax.legend(loc='upper left')
-plt.xticks(np.arange(1992, 2013, step=2))
-plt.show()
+class GLCModel:
+    """
+    The Growing like China Model
+    """
+    def __init__(self,
+                 environment,  # parameters describing the environment
+                 worker_cls=Worker,  # class for workers
+                 entrepreneur_cls=Entrepreneur  # class for entrepreneurs
+                 ):
+        self.env = environment
+        self.w_cls = worker_cls
+        self.e_cls = entrepreneur_cls
+
+        self.var = AttributeDict()
+
+        self.converged = False
+        self.computations_complete = False
+
+    def life_cycle_profile_pre(self):
+        # Dummy worker to obtain age_max and a vector of wages
+        w1 = self.w_cls(age=1, wage=self.env.w_pre)
+        age_max = w1.age_max
+        wages = w1.income0(g=0.)
+
+        wealth_pre = np.zeros(age_max)
+        consumption_pre = np.zeros(age_max)
+        sr_pre = np.zeros(age_max)
+        for i in range(age_max):
+            age = i + 1
+            wage = wages[i]
+            wealth = wealth_pre[i]
+            w = self.w_cls(age=age, wage=wage, wealth=wealth)
+            wealth_next, sr_pre[i], consumption_pre[i] = w.optimize0(self.env)
+            if age < age_max:
+                wealth_pre[i+1] = wealth_next
+        return wealth_pre
+
+    def solve(self,
+              relax=0.75,
+              iter_max=1000,
+              tol=1e-4
+              ):
+        """
+        Solve the model
+        """
+        self.var.clear()
+
+        # Parameters
+        r = self.env.r
+        eta = self.env.eta
+        ice_t = self.env.ice_t
+        alpha = self.env.alpha
+        ksi = self.env.ksi
+        psi = self.env.psi
+        delta = self.env.delta
+        time_max = self.env.time_max
+        age_max = self.env.age_max
+        age_T = self.env.age_T
+        age_T_w = self.env.age_T_w
+        e_pre = self.env.e_pre
+        n_pre = self.env.n_pre
+        initial_ratio_E = self.env.initial_ratio_E
+
+        # Initial wealth distribution
+        wealth_pre_E = initial_ratio_E * self.life_cycle_profile_pre()
+
+        pop_weight = self.env.demographic_distribution()
+        # the initial size of workers before retirement
+        nw_pre = np.sum(pop_weight[0:age_T_w-1]) * n_pre
+        # the initial size of entrepreneurs after being firm owner
+        ee_pre = np.sum(pop_weight[age_T-1:age_max]) * e_pre
+
+        dev_max = 1.
+        iteration = 0
+
+        # initial guess = true results
+        initial_guess = loadmat(os.path.join('original_files',
+                                             'data_result.mat'))
+        w_t = initial_guess['w_t'].flatten()
+        m_t = initial_guess['m_t'].flatten()
+        rho_t = initial_guess['rho_t'].flatten()
+
+        while dev_max > tol and iteration < iter_max:
+            # an indicator for the end of transition
+            I_end = 0
+
+            # Initialize all vectors and matrices
+            SHAPE_LONG_WIDE = (time_max+age_max-1, age_max)
+            SHAPE_SHORT_WIDE = (time_max, age_max)
+            SHAPE_SHORT = time_max
+            SHAPE_LONG = time_max + age_max - 1
+
+            ae = np.zeros(SHAPE_SHORT_WIDE)
+            AE = np.zeros(SHAPE_SHORT_WIDE)
+            loan = np.zeros(SHAPE_SHORT_WIDE)
+            ke = np.zeros(SHAPE_SHORT_WIDE)
+            ne = np.zeros(SHAPE_SHORT_WIDE)
+            KE = np.zeros(SHAPE_SHORT_WIDE)
+            NE = np.zeros(SHAPE_SHORT_WIDE)
+            LE = np.zeros(SHAPE_SHORT_WIDE)
+
+            wealth_E = np.zeros(SHAPE_LONG_WIDE)
+            consumption_E = np.zeros(SHAPE_LONG_WIDE)
+
+            AE_t = np.zeros(SHAPE_SHORT)
+            NE_t = np.zeros(SHAPE_SHORT)
+            KE_t = np.zeros(SHAPE_SHORT)
+            LE_t = np.zeros(SHAPE_SHORT)
+            N_t = np.zeros(SHAPE_SHORT)
+            YE_t = np.zeros(SHAPE_SHORT)
+            M_t = np.zeros(SHAPE_SHORT)
+            loan_ratio = np.zeros(SHAPE_SHORT)
+
+            w_t_new = np.zeros(SHAPE_LONG)
+            rho_t_new = np.zeros(SHAPE_LONG)
+            m_t_new = np.zeros(SHAPE_LONG)
+
+            # existing entrepreneurs
+            # aged age_max but not aged one (they would be new)
+            for age in range(2, age_max+1):
+                ii = age - 1
+                # computing existing entrepreneurs' wealth
+                # given the guess of m_t and rho_t
+                e = self.e_cls(age=age, wealth=wealth_pre_E[ii])
+                result = e.optimize(self.env, w_t, m_t, rho_t)
+                consumption, wealth = result['consumption'], result['wealth']
+                # wealth and cons time series for the existing enterpreneurs
+                for tt in range(age_max-ii):
+                    wealth_E[tt, ii+tt] = wealth[tt]
+                    consumption_E[tt, ii+tt] = consumption[tt]
+
+            # newly-born entrepreneurs
+            for tt in range(time_max):
+                year = tt+1
+                e = self.e_cls(age=1, wealth=0., year=year)
+                result = e.optimize(self.env, w_t, m_t, rho_t)
+                consumption, wealth = result['consumption'], result['wealth']
+                # wealth and cons time series for the existing enterpreneurs
+                for ii in range(age_max):
+                    wealth_E[tt+ii, ii] = wealth[ii]
+                    consumption_E[tt+ii, ii] = consumption[ii]
+
+            # Update new factor price time series
+            for t in range(time_max):
+
+                # Fixed size of managers
+                E_t = e_pre - ee_pre
+
+                # Assets in the E sector
+                for i in range(age_max):
+                    # entrepreneurial capital owned by an entprepreneur
+                    # at time t with age i
+                    ae[t, i] = wealth_E[t, i]
+                    # total capital owned by all entrepreneurs
+                    # at time t with age i
+                    AE[t, i] = e_pre * pop_weight[i] * ae[t, i]
+
+                # capital and labor in the E sector
+                for i in range(age_T-1, age_max):
+                    if rho_t[t] >= r / (1.-ice_t[t]):  # borrowing profitable
+                        loan_ratio[t] = (
+                                eta * (1.+rho_t[t])
+                                / (1.+r/(1.-ice_t[t])-eta*(rho_t[t]-r/(1.-ice_t[t])))
+                                )  # loan asset ratio
+                        loan[t, i] = wealth_E[t, i] * loan_ratio[t]
+                        # entrepreneurial capital owned by an entrepreneur
+                        # at time t with age i
+                        ke[t, i] = wealth_E[t, i] + loan[t, i]
+                    else:  # borrowing is not profitable
+                        loan[t, i] = 0.
+                        # entrepreneurial capital owned by an entrepreneur
+                        # at time t with age i
+                        ke[t, i] = wealth_E(t, i)
+        
+                    # labor employed by an entrepreneur at time with age i
+                    ne[t, i] = ke[t, i] * (
+                            (1.-alpha)
+                            * (1.-psi)*ksi**(1.-alpha)
+                            / w_t[t])**(1./alpha)
+                    # total capital owned by all entrepreneurs at time with age i
+                    KE[t, i] = e_pre * pop_weight[i] * ke[t, i]
+                    # total labor employed by all entrepreneurs at time with age i
+                    NE[t, i] = e_pre * pop_weight[i] * ne[t, i]
+                    # total loan
+                    LE[t, i] = e_pre * pop_weight[i] * loan[t, i]
+
+                # resource allocation
+                AE_t[t] = AE[t, :].sum()  # aggregate capital in the E sector
+                NE_t[t] = NE[t, :].sum()  # aggregate employment in the E sector
+                KE_t[t] = KE[t, :].sum()  # when rho > r
+                LE_t[t] = LE[t, :].sum()  # total loan
+                N_t[t] = nw_pre  # the size of workers (no migration)
+
+                # factor prices
+                # wage rate
+                w_t_new[t] = (
+                        (1.-psi) * (1.-alpha) * (KE_t[t]/NE_t[t])**alpha
+                        * ksi**(1.-alpha)
+                        )
+
+                # locate the end of the transition
+                if NE_t[t] >= N_t[t] and I_end == 0:
+                    I_end = 1
+                    self.var.I_t = t
+                elif I_end == 1:
+                    I_end = 1
+
+                if I_end == 0:
+                    w_t_new[t] = (
+                            (1.-alpha)
+                            * (alpha/(r/(1.-ice_t[t])+delta))**(alpha/(1.-alpha))
+                            )  # wage rate
+                else:
+                    NE_t[t] = N_t[t]
+                    w_t_new[t] = (
+                            (1.-psi) * (1.-alpha) * (KE_t[t]/N_t[t])**alpha
+                            * ksi**(1.-alpha)
+                            )  # wage rate
+
+                # the internal rate of return for entrepreneurs
+                rho_t_new[t] = np.max(
+                        [r,
+                         (
+                                 (1.-psi)**(1./alpha) * ksi**((1.-alpha)/alpha)
+                                 * alpha
+                                 * ((1.-alpha)/w_t_new[t])**((1.-alpha)/alpha)
+                                 - delta
+                         )
+                         ]
+                        )
+                # aggregate output in the E sector
+                YE_t[t] = KE_t[t]**alpha * (ksi*NE_t[t])**(1.-alpha)
+                # total managerial compensations
+                M_t[t] = psi * YE_t[t]
+                # compensations for young entrepreneurs
+                m_t_new[t] = M_t[t] / E_t
+
+            # steady state assumption
+            w_t_new[time_max:] = w_t_new[time_max-1]
+            rho_t_new[time_max:] = rho_t_new[time_max-1]
+            m_t_new[time_max:] = m_t_new[time_max-1]
+
+            # deviation
+            dev_w = np.abs(w_t_new-w_t)
+            dev_rho = np.abs(rho_t_new-rho_t)
+            dev_m = np.abs(m_t_new-m_t)
+            dev_w_max = dev_w.max()
+            dev_rho_max = dev_rho.max()
+            dev_m_max = dev_m.max()
+            dev_max = np.array([dev_w_max, dev_rho_max, dev_m_max]).max()
+
+            # renew
+            w_t = w_t*relax + w_t_new*(1.-relax)
+            rho_t = rho_t*relax + rho_t_new*(1.-relax)
+            m_t = m_t*relax + m_t_new*(1.-relax)
+
+            if int(5*np.floor(iteration/5)) == iteration:
+                print("Iter: {0}, max dev: {1}".format(iteration, dev_max))
+
+            iteration += 1
+
+        # Keep useful variables
+        KEEPVARS = ['m_t', 'w_t', 'rho_t', 'consumption_E', 'NE_t', 'YE_t',
+                    'KE_t', 'AE_t']
+        new_vars = {
+                key: val for key, val in locals().items() if key in KEEPVARS
+                }
+        self.var.update(new_vars)
+
+        converged = iteration < iter_max
+        self.converged = converged
+
+        return converged  # True if iteration converged
+
+    def compute(self):
+        """
+        Compute the remaining variables of the model
+        """
+        assert self.converged is True
+
+        # Parameters
+        r = self.env.r
+        ice_t = self.env.ice_t
+        alpha = self.env.alpha
+        g_n = self.env.g_n
+        g_t = self.env.g_t
+        delta = self.env.delta
+        time_max = self.env.time_max
+        age_max = self.env.age_max
+        age_T_w = self.env.age_T_w
+        e_pre = self.env.e_pre
+        n_pre = self.env.n_pre
+        initial_ratio = self.env.initial_ratio
+
+        # Initial wealth distribution
+        wealth_pre_W = initial_ratio * self.life_cycle_profile_pre()
+
+        pop_weight = self.env.demographic_distribution()
+        # the initial size of workers before retirement
+        nw_pre = np.sum(pop_weight[0:age_T_w-1]) * n_pre
+
+        # Equilibrium values
+        w_t = self.var.w_t
+        m_t = self.var.m_t
+        rho_t = self.var.rho_t
+
+        # Entrepreneur equilibrium variables
+        consumption_E = self.var.consumption_E
+        NE_t = self.var.NE_t
+        YE_t = self.var.YE_t
+        KE_t = self.var.KE_t
+        AE_t = self.var.AE_t
+
+        SHAPE_LONG_WIDE = (time_max+age_max-1, age_max)
+        SHAPE_SHORT_WIDE = (time_max, age_max)
+        SHAPE_SHORT = time_max
+        # SHAPE_LONG = time_max + age_max - 1
+
+        # Initialize all vectors and matrices
+        wealth_F = np.zeros(SHAPE_LONG_WIDE)
+        consumption_F = np.zeros(SHAPE_LONG_WIDE)
+        N_t = np.zeros(SHAPE_SHORT)
+        AF = np.zeros(SHAPE_SHORT_WIDE)
+        CF = np.zeros(SHAPE_SHORT_WIDE)
+        CE = np.zeros(SHAPE_SHORT_WIDE)
+        AF_t = np.zeros(SHAPE_SHORT)
+        CF_t = np.zeros(SHAPE_SHORT)
+        CE_t = np.zeros(SHAPE_SHORT)
+        KF_t = np.zeros(SHAPE_SHORT)
+        YF_t = np.zeros(SHAPE_SHORT)
+        NF_t = np.zeros(SHAPE_SHORT)
+        NE_N_t = np.zeros(SHAPE_SHORT)
+        IF_t = np.zeros(SHAPE_SHORT)
+        IE_t = np.zeros(SHAPE_SHORT)
+        IF_Y_t = np.zeros(SHAPE_SHORT)
+        IE_Y_t = np.zeros(SHAPE_SHORT)
+        SF_t = np.zeros(SHAPE_SHORT)
+        SF_YF_t = np.zeros(SHAPE_SHORT)
+        SE_t = np.zeros(SHAPE_SHORT)
+        SE_YE_t = np.zeros(SHAPE_SHORT)
+        Y_N_t = np.zeros(SHAPE_SHORT)
+        I_Y_t = np.zeros(SHAPE_SHORT)
+        S_Y_t = np.zeros(SHAPE_SHORT)
+        K_Y_t = np.zeros(SHAPE_SHORT)
+        FA_Y_t = np.zeros(SHAPE_SHORT)
+        BoP_Y_t = np.zeros(SHAPE_SHORT)
+        TFP_t = np.zeros(SHAPE_SHORT)
+        YG_t = np.zeros(SHAPE_SHORT)
+
+        # workers' savings and assets
+        for age in range(2, age_max+1):
+            ii = age - 1
+            # computing existing workers' wealth
+            w = self.w_cls(age=age, wealth=wealth_pre_W[ii])
+            result = w.optimize(self.env, w_t, m_t, rho_t)
+            consumption, wealth = result['consumption'], result['wealth']
+            # wealth and cons time series for the existing workers
+            for tt in range(age_max-ii):
+                wealth_F[tt, ii+tt] = wealth[tt]
+                consumption_F[tt, ii+tt] = consumption[tt]
+
+        # newly-born workers
+        for tt in range(time_max):
+            year = tt + 1
+            w = self.w_cls(age=1, wealth=0., year=year)
+            result = w.optimize(self.env, w_t, m_t, rho_t)
+            consumption, wealth = result['consumption'], result['wealth']
+            for ii in range(age_max):
+                wealth_F[tt+ii, ii] = wealth[ii]
+                consumption_F[tt+ii, ii] = consumption[ii]
+
+        # demographic structure and others
+        for t in range(time_max):
+
+            # no migration
+            N_t[t] = nw_pre
+
+            # total assets of workers and total consumptions
+            for i in range(age_max):
+                AF[t, i] = n_pre * pop_weight[i] * wealth_F[t, i]
+                CF[t, i] = n_pre * pop_weight[i] * consumption_F[t, i]
+                CE[t, i] = e_pre * pop_weight[i] * consumption_E[t, i]
+
+            AF_t[t] = AF[t, :].sum()  # aggregate capital in the E sector
+            CF_t[t] = CF[t, :].sum()  # aggregate consumption in the F sector
+            CE_t[t] = CE[t, :].sum()  # aggregate consumption in the E sector
+
+            # the F sector
+            if NE_t[t] < N_t[t]:
+                KF_t[t] = (
+                        (alpha/(r/(1.-ice_t[t])+delta))**(1./(1.-alpha))
+                        * (N_t[t]-NE_t[t])
+                        )  # aggregate capital in the F sector
+                YF_t[t] = (
+                        KF_t[t]**alpha * (N_t[t]-NE_t[t])**(1.-alpha)
+                        )  # aggregate output in the F sector
+                NF_t[t] = N_t[t] - NE_t[t]  # aggregate workers in the F sector
+            else:
+                KF_t[t] = 0.
+                YF_t[t] = 0.
+                NF_t[t] = 0.
+
+        # aggregation
+        Y_t = YF_t + YE_t
+        K_t = KF_t + KE_t
+        C_t = CF_t + CE_t
+
+        for t in range(time_max-1):
+
+            # private employment share
+            NE_N_t[t] = NE_t[t] / N_t[t]
+
+            # computing investment in the F sector
+            IF_t[t] = (1.+g_t)*(1.+g_n)*KF_t[t+1] - (1.-delta)*KF_t[t]
+
+            # computing investment in the E sector
+            IE_t[t] = (1.+g_t)*(1.+g_n)*KE_t[t+1] - (1.-delta)*KE_t[t]
+
+            # investment rates in the two sectors
+            if YF_t[t] > 0:
+                IF_Y_t[t] = IF_t[t] / YF_t[t]
+            else:
+                IF_Y_t[t] = 0.0
+            IE_Y_t[t] = IE_t[t] / YE_t[t]
+
+            # computing workers' savings
+            SF_t[t] = (1.+g_t)*(1.+g_n)*AF_t[t+1] - AF_t[t] + delta*KF_t[t]
+            if YF_t[t] > 0:
+                SF_YF_t[t] = SF_t[t] / YF_t[t]
+
+            # computing enterpreneurs' savings
+            SE_t[t] = (1.+g_t)*(1.+g_n)*AE_t[t+1] - AE_t[t] + delta*KE_t[t]
+            SE_YE_t[t] = SE_t[t] / YE_t[t]
+
+            # aggregate output per capita
+            Y_N_t[t] = Y_t[t] / N_t[t]
+
+            # aggregate investment rate
+            I_Y_t[t] = (IF_t[t]+IE_t[t]) / Y_t[t]
+
+            # aggregate saving rate
+            S_Y_t[t] = (SF_t[t]+SE_t[t]) / Y_t[t]
+
+            # capital output ratio
+            K_Y_t[t] = K_t[t] / Y_t[t]
+
+            # capital outflows
+            FA_Y_t[t] = (AE_t[t]+AF_t[t]-K_t[t]) / Y_t[t]  # stock
+            BoP_Y_t[t] = S_Y_t[t] - I_Y_t[t]  # flow
+
+            if t > 0:
+                TFP_t[t] = (
+                        Y_t[t]/Y_t[t-1]
+                        - alpha*K_t[t]/K_t[t-1]
+                        - (1.-alpha)*N_t[t]/N_t[t-1]
+                        )
+                YG_t[t] = (Y_t[t]/Y_t[t-1]-1.) + g_n + g_t
+
+        self.computations_complete = True
+
+        # Keep variables
+        KEEPVARS = ['NE_N_t', 'S_Y_t', 'I_Y_t', 'FA_Y_t', 'TFP_t', 'BoP_Y_t']
+        new_vars = {
+                key: val for key, val in locals().items() if key in KEEPVARS
+                }
+        self.var.update(new_vars)
+        return True
+
+    def figures(self, data, end_year=2012, step=2):
+        """
+        Standard figures
+        """
+        # Figures
+        # time_begin = 0
+        # time_end = 100  # ; time_max-1;
+        # tt = [time_begin, time_end]
+        assert self.computations_complete is True
+
+        # Parameters
+        r = self.env.r
+        ice_t = self.env.ice_t
+        alpha = self.env.alpha
+        g_t = self.env.g_t
+
+        # Equilibrium values
+        NE_N_t = self.var.NE_N_t
+        S_Y_t = self.var.S_Y_t
+        I_Y_t = self.var.I_Y_t
+        FA_Y_t = self.var.FA_Y_t
+        TFP_t = self.var.TFP_t
+        BoP_Y_t = self.var.BoP_Y_t
+
+        # Panel 1
+        r_F = r / (1.-ice_t)
+        t = np.arange(1992, end_year+1, 1)
+        s = r_F[:len(t)]
+        fig, ax = plt.subplots()
+        ax.plot(t, s)
+        ax.set(xlabel='year',
+               title='Panel 1: rate of return in F firms')
+
+        ax.set_xlim(1992, end_year)
+        ax.grid()
+        plt.xticks(np.arange(1992, end_year+1, step=step))
+        plt.show()
+
+        # Panel 2
+        fig, ax = plt.subplots()
+        t = np.arange(1992, end_year+1, 1)
+        s = NE_N_t[:len(t)]
+        ax.plot(t, s, label='model')
+        t = np.arange(1998, 2008, 1)
+        s = data['em_sh']
+        ax.plot(t, s, label='firm data')
+
+        ax.set(xlabel='year',
+               title='Panel 2: E firm employment share')
+
+        ax.set_xlim(1992, end_year)
+        ax.grid()
+        ax.legend(loc='upper left')
+        plt.xticks(np.arange(1992, end_year+1, step=step))
+        plt.show()
+
+        # Panel 3
+        fig, ax = plt.subplots()
+        t = np.arange(1992, end_year+1, 1)
+        s = S_Y_t[:len(t)]
+        ax.plot(t, s, label='model')
+        t = np.arange(1992, 2008, 1)
+        s = data['sav']
+        ax.plot(t, s, label='data')
+
+        ax.set(xlabel='year',
+               title='Panel 3: aggregate saving rate')
+
+        ax.set_xlim(1992, end_year)
+        ax.grid()
+        ax.legend(loc='upper left')
+        plt.xticks(np.arange(1992, end_year+1, step=step))
+        plt.show()
+
+        # Panel 4
+        fig, ax = plt.subplots()
+        t = np.arange(1992, end_year+1, 1)
+        s = I_Y_t[:len(t)]
+        ax.plot(t, s, label='model')
+        t = np.arange(1992, 2008, 1)
+        s = data['inv']
+        ax.plot(t, s, label='data')
+
+        ax.set(xlabel='year',
+               title='Panel 4: aggregate investment rate')
+
+        ax.set_xlim(1992, end_year)
+        ax.grid()
+        ax.legend(loc='upper left')
+        plt.xticks(np.arange(1992, end_year+1, step=step))
+        plt.show()
+
+        # Panel 5
+        fig, ax = plt.subplots()
+        t = np.arange(1992, end_year+1, 1)
+        s = FA_Y_t[:len(t)]
+        ax.plot(t, s, label='model')
+        t = np.arange(1992, 2008, 1)
+        s = data['res']
+        ax.plot(t, s, label='data')
+
+        ax.set(xlabel='year',
+               title='Panel 5: foreign reserves / GDP')
+
+        ax.set_xlim(1992, end_year)
+        ax.grid()
+        ax.legend(loc='upper left')
+        plt.xticks(np.arange(1992, end_year+1, step=step))
+        plt.show()
+
+        # Panel 6
+        fig, ax = plt.subplots()
+        t = np.arange(1992, end_year+1, 1)
+        s = TFP_t[:len(t)] + (1.-alpha)*g_t
+        ax.plot(t, s, label='model')
+
+        ax.set(xlabel='year',
+               title='Panel 6: TFP growth rate')
+
+        ax.set_xlim(1992, end_year)
+        ax.grid()
+        ax.legend(loc='upper left')
+        plt.xticks(np.arange(1992, end_year+1, step=step))
+        plt.show()
+
+        # Panel 7
+        fig, ax = plt.subplots()
+        t = np.arange(1992, end_year+1, 1)
+        s = BoP_Y_t[:len(t)]
+        ax.plot(t, s, label='model')
+        t = np.arange(1992, 2008, 1)
+        s = data['SI_Y']
+        ax.plot(t, s, label='data')
+
+        ax.set(xlabel='year',
+               title='Panel 7: net export GDP ratio')
+
+        ax.set_xlim(1992, end_year)
+        ax.grid()
+        ax.legend(loc='upper left')
+        plt.xticks(np.arange(1992, end_year+1, step=step))
+        plt.show()
+
+
+def main():
+    params = Parameters()
+    model = GLCModel(params)
+    converged = model.solve()
+    if converged:
+        model.compute()
+        model.figures(DATA, end_year=2012, step=4)
+    return model.var
+
+
+if __name__ == "__main__":
+    results = main()

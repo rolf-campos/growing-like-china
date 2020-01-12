@@ -87,3 +87,9 @@ DATA_SI_Y = [0.009998114,
              0.054178739,
              0.075136036,
              0.088817345]
+
+DATA = {'sav': DATA_sav,
+        'inv': DATA_inv,
+        'res': DATA_res,
+        'em_sh': DATA_em_sh,
+        'SI_Y': DATA_SI_Y}
