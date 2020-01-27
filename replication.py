@@ -661,7 +661,7 @@ class GLCModel:
                         loan[t, i] = 0.
                         # entrepreneurial capital owned by an entrepreneur
                         # at time t with age i
-                        ke[t, i] = wealth_E(t, i)
+                        ke[t, i] = wealth_E[t, i]
         
                     # labor employed by an entrepreneur at time with age i
                     ne[t, i] = ke[t, i] * (
